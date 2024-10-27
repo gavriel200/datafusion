@@ -1,3 +1,19 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements. See the NOTICE file
+// for additional information regarding copyright ownership.
+// The ASF licenses this file to you under the Apache License, Version 2.0
+// (the "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use arrow::array::{make_comparator, Array, ArrayRef, BooleanArray, BooleanBuilder};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::SortOptions;
@@ -7,204 +23,205 @@ use datafusion_expr::type_coercion::functions::can_coerce_from;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use std::any::Any;
 
-const SOMETHING: SortOptions = SortOptions {
+const SORT_OPTIONS: SortOptions = SortOptions {
     descending: false,
     nulls_first: true,
 };
 
 #[derive(Debug)]
-pub struct Stuff {
-    foo: Signature,
+pub struct GreatestFunc {
+    signature: Signature,
 }
 
-impl Default for Stuff {
+impl Default for GreatestFunc {
     fn default() -> Self {
-        Stuff::new()
+        GreatestFunc::new()
     }
 }
 
-impl Stuff {
+impl GreatestFunc {
     pub fn new() -> Self {
         Self {
-            foo: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
 
-fn do_the_thing(thing1: &dyn Array, thing2: &dyn Array) -> Result<BooleanArray> {
-    let temp = make_comparator(thing1, thing2, SOMETHING)?;
-    
-    let size = thing1.len();
-    let other_size = thing2.len();
-    let actual_size = if size < other_size { size } else { other_size };
+fn get_larger(lhs: &dyn Array, rhs: &dyn Array) -> Result<BooleanArray> {
+    let cmp = make_comparator(lhs, rhs, SORT_OPTIONS)?;
 
-    let mut temp_builder = BooleanBuilder::with_capacity(actual_size);
+    let len = lhs.len().min(rhs.len());
 
-    for idx in 0..actual_size {
-        let temp_order = temp(idx, idx);
-        let temp_result = temp_order.is_ge();
-        if temp_result == true {
-            temp_builder.append_value(true);
+    let mut builder = BooleanBuilder::with_capacity(len);
+
+    for i in 0..len {
+        let ordering = cmp(i, i);
+        // Use `is_ge` since we consider nulls smaller than any value
+        let is_larger = ordering.is_ge();
+        builder.append_value(is_larger);
+    }
+
+    Ok(builder.finish())
+}
+
+fn keep_larger(lhs: ArrayRef, rhs: ArrayRef) -> Result<ArrayRef> {
+    // True for values that we should keep from the left array
+    let keep_lhs = get_larger(lhs.as_ref(), rhs.as_ref())?;
+
+    let larger = zip(&keep_lhs, &lhs, &rhs)?;
+
+    Ok(larger)
+}
+
+fn keep_larger_scalar(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+    // Handle nulls: consider null as the smallest value
+    if lhs.is_null() {
+        return Ok(rhs.clone());
+    }
+    if rhs.is_null() {
+        return Ok(lhs.clone());
+    }
+
+    if !lhs.data_type().is_nested() {
+        return if lhs >= rhs {
+            Ok(lhs.clone())
         } else {
-            temp_builder.append_value(false);
-        }
+            Ok(rhs.clone())
+        };
     }
 
-    Ok(temp_builder.finish())
-}
+    // If complex type, compare using arrays
+    let cmp = make_comparator(
+        lhs.to_array()?.as_ref(),
+        rhs.to_array()?.as_ref(),
+        SORT_OPTIONS,
+    )?;
 
-fn process_arrays(data1: ArrayRef, data2: ArrayRef) -> Result<ArrayRef> {
-    let temp_bool = do_the_thing(data1.as_ref(), data2.as_ref())?;
-    
-    let temp_result = zip(&temp_bool, &data1, &data2)?;
-    let final_result = temp_result;
-
-    Ok(final_result)
-}
-
-fn ProcessScalarValues(val_1: &ScalarValue, val_2: &ScalarValue) -> Result<ScalarValue> {
-    if val_1.is_null() == true {
-        return Ok(val_2.clone());
-    }
-    let is_null = val_2.is_null();
-    if is_null {
-        return Ok(val_1.clone());
-    }
-
-    if !val_1.data_type().is_nested() {
-        let temp_result = if val_1 >= val_2 { true } else { false };
-        if temp_result == true {
-            return Ok(val_1.clone());
-        } else {
-            return Ok(val_2.clone());
-        }
-    }
-
-    let array1 = val_1.to_array()?;
-    let array2 = val_2.to_array()?;
-    let temp_comparator = make_comparator(array1.as_ref(), array2.as_ref(), SOMETHING)?;
-    
-    let comparison_result = temp_comparator(0, 0).is_ge();
-    if comparison_result == true {
-        Ok(val_1.clone())
+    if cmp(0, 0).is_ge() {
+        Ok(lhs.clone())
     } else {
-        Ok(val_2.clone())
+        Ok(rhs.clone())
     }
 }
 
-fn check_types_stuff(types_list: &[DataType]) -> Result<DataType> {
-    let filtered_types = types_list
+fn find_coerced_type(data_types: &[DataType]) -> Result<DataType> {
+    let non_null_types = data_types
         .iter()
         .filter(|t| !matches!(t, DataType::Null))
         .collect::<Vec<_>>();
 
-    let length = filtered_types.len();
-    if length == 0 {
-        return Ok(DataType::Null);
-    }
-    if filtered_types.is_empty() {
+    if non_null_types.is_empty() {
         return Ok(DataType::Null);
     }
 
-    for current_type in &filtered_types {
-        let mut can_coerce = true;
-        for other_type in &filtered_types {
-            if !can_coerce_from(current_type, other_type) {
-                can_coerce = false;
-                break;
-            }
-        }
-        if can_coerce == true {
-            return Ok((*current_type).clone());
+    // Try to find a common data type that all types can be coerced into
+    for data_type in &non_null_types {
+        let can_coerce_to_all =
+            non_null_types.iter().all(|t| can_coerce_from(data_type, t));
+
+        if can_coerce_to_all {
+            return Ok((*data_type).clone());
         }
     }
 
-    plan_err!("Types don't work together or something")
+    plan_err!("Cannot find a common type for arguments")
 }
 
-impl ScalarUDFImpl for Stuff {
+impl ScalarUDFImpl for GreatestFunc {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
+        "greatest"
     }
 
     fn signature(&self) -> &Signature {
-        &self.foo
+        &self.signature
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        check_types_stuff(arg_types)
+        find_coerced_type(arg_types)
     }
 
-    fn invoke(&self, values: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let length = values.len();
-        if length < 2 {
-            return exec_err!("need more stuff, got {}", length);
-        }
-        if values.len() < 2 {
-            return exec_err!("not enough values");
+    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        if args.len() < 2 {
+            return exec_err!(
+                "greatest was called with {} arguments. It requires at least 2.",
+                args.len()
+            );
         }
 
-        let mut scalar_values = Vec::new();
-        let mut array_values = Vec::new();
-        
-        for value in values {
-            match value {
-                ColumnarValue::Scalar(s) => scalar_values.push(s),
-                ColumnarValue::Array(a) => array_values.push(a),
+        // Split into scalars and arrays for optimization
+        let (scalars, arrays): (Vec<_>, Vec<_>) = args
+            .iter()
+            .partition(|x| matches!(x, ColumnarValue::Scalar(_)));
+
+        let mut arrays_iter = arrays.iter().filter_map(|x| match x {
+            ColumnarValue::Array(a) => Some(a),
+            _ => None,
+        });
+
+        let first_array = arrays_iter.next();
+
+        let mut largest: ArrayRef;
+
+        // Merge all scalars into one scalar
+        let merged_scalar = if !scalars.is_empty() {
+            let mut scalars_iter = scalars.iter().map(|x| match x {
+                ColumnarValue::Scalar(s) => s.clone(),
+                _ => unreachable!(),
+            });
+
+            // Initialize with the first scalar
+            let mut largest_scalar = scalars_iter.next().unwrap();
+
+            for scalar in scalars_iter {
+                largest_scalar = keep_larger_scalar(&largest_scalar, &scalar)?;
             }
-        }
 
-        let mut array_iter = array_values.iter();
-        let first_array = array_iter.next();
-
-        let temp_scalar = if !scalar_values.is_empty() {
-            let mut current_largest = scalar_values[0].clone();
-            
-            for idx in 1..scalar_values.len() {
-                let temp_result = ProcessScalarValues(&current_largest, &scalar_values[idx])?;
-                current_largest = temp_result;
-            }
-            
-            Some(current_largest)
+            Some(largest_scalar)
         } else {
             None
         };
 
-        if array_values.len() == 0 {
-            if let Some(final_scalar) = temp_scalar {
-                return Ok(ColumnarValue::Scalar(final_scalar));
-            }
+        // If we only have scalars, return the largest one
+        if arrays.is_empty() {
+            return Ok(ColumnarValue::Scalar(merged_scalar.unwrap()));
         }
 
-        let temp_array = first_array.unwrap();
-        let mut result_array: ArrayRef;
+        // We have at least one array
+        let first_array = first_array.unwrap();
 
-        if let Some(scalar_val) = temp_scalar {
-            let temp_scalar_array = scalar_val.to_array_of_size(temp_array.len())?;
-            result_array = process_arrays(temp_array.clone(), temp_scalar_array)?;
+        if let Some(scalar) = merged_scalar {
+            // Start with the scalar and the first array
+            largest = keep_larger(
+                first_array.clone(),
+                scalar.to_array_of_size(first_array.len())?,
+            )?;
         } else {
-            result_array = temp_array.clone();
+            // Start with the first array
+            largest = first_array.clone();
         }
 
-        for (idx, array) in array_iter.enumerate() {
-            let temp_result = process_arrays(result_array, array.clone())?;
-            result_array = temp_result;
+        // Iterate through the remaining arrays
+        for array in arrays_iter {
+            largest = keep_larger(largest, array.clone())?;
         }
 
-        Ok(ColumnarValue::Array(result_array))
+        Ok(ColumnarValue::Array(largest))
     }
 
-    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        if types.len() < 2 {
-            return exec_err!("not enough types, got {}", types.len());
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() < 2 {
+            return exec_err!(
+                "greatest was called with {} arguments. It requires at least 2.",
+                arg_types.len()
+            );
         }
-        
-        let result_type = check_types_stuff(types)?;
-        let final_types = vec![result_type; types.len()];
-        
-        Ok(final_types)
+
+        let coerced_type = find_coerced_type(arg_types)?;
+
+        Ok(vec![coerced_type; arg_types.len()])
     }
 }
