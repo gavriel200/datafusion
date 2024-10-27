@@ -26,6 +26,7 @@ pub mod bounds;
 pub mod cot;
 pub mod factorial;
 pub mod gcd;
+pub mod greatest;
 pub mod iszero;
 pub mod lcm;
 pub mod log;
@@ -170,6 +171,7 @@ make_math_unary_udf!(
 );
 make_udf_function!(log::LogFunc, LOG, log);
 make_udf_function!(gcd::GcdFunc, GCD, gcd);
+make_udf_function!(greatest::GreatestFunc, GREATEST, greatest);
 make_udf_function!(nans::IsNanFunc, ISNAN, isnan);
 make_udf_function!(iszero::IsZeroFunc, ISZERO, iszero);
 make_udf_function!(lcm::LcmFunc, LCM, lcm);
@@ -282,6 +284,7 @@ pub mod expr_fn {
         (factorial, "factorial", num),
         (floor, "nearest integer less than or equal to argument", num),
         (gcd, "greatest common divisor", x y),
+        (greatest, "returns the greatest value in an array", args),
         (isnan, "returns true if a given number is +NaN or -NaN otherwise returns false", num),
         (iszero, "returns true if a given number is +0.0 or -0.0 otherwise returns false", num),
         (lcm, "least common multiple", x y),
@@ -326,6 +329,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         factorial(),
         floor(),
         gcd(),
+        greatest(),
         isnan(),
         iszero(),
         lcm(),
