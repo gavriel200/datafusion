@@ -225,3 +225,106 @@ impl ScalarUDFImpl for GreatestFunc {
         Ok(vec![coerced_type; arg_types.len()])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Date32Array, Float64Array, Int32Array, StringArray};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_greatest_int32_arrays() {
+        let func = GreatestFunc::new();
+
+        let arr1 = ColumnarValue::Array(Arc::new(Int32Array::from(vec![1, 8, 3, 5])));
+        let arr2 = ColumnarValue::Array(Arc::new(Int32Array::from(vec![4, 5, 6, 7])));
+
+        let result = func.invoke(&[arr1, arr2]).unwrap();
+        let result_array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected an array"),
+        };
+
+        let expected = Int32Array::from(vec![4, 8, 6, 7]);
+        let result_as_int32 = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(result_as_int32, &expected);
+    }
+
+    #[test]
+    fn test_greatest_with_nulls() {
+        let func = GreatestFunc::new();
+
+        let arr1 = ColumnarValue::Array(Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(5),
+        ])));
+        let arr2 = ColumnarValue::Array(Arc::new(Int32Array::from(vec![
+            Some(4),
+            Some(5),
+            None,
+            Some(7),
+        ])));
+
+        let result = func.invoke(&[arr1, arr2]).unwrap();
+        let result_array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected an array"),
+        };
+
+        let expected = Int32Array::from(vec![Some(4), Some(5), Some(3), Some(7)]);
+        let result_as_int32 = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(result_as_int32, &expected);
+    }
+
+    #[test]
+    fn test_greatest_with_scalars() {
+        let func = GreatestFunc::new();
+
+        let arr1 = ColumnarValue::Array(Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(8),
+            Some(3),
+            None,
+        ])));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Int32(Some(5)));
+
+        let result = func.invoke(&[arr1, scalar]).unwrap();
+        let result_array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected an array"),
+        };
+
+        let expected = Int32Array::from(vec![Some(5), Some(8), Some(5), Some(5)]);
+        let result_as_int32 = result_array.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(result_as_int32, &expected);
+    }
+
+    #[test]
+    fn test_greatest_float_arrays() {
+        let func = GreatestFunc::new();
+
+        let arr1 =
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![1.0, 8.0, 3.0, 5.0])));
+        let arr2 =
+            ColumnarValue::Array(Arc::new(Float64Array::from(vec![4.0, 5.0, 6.0, 7.0])));
+
+        let result = func.invoke(&[arr1, arr2]).unwrap();
+        let result_array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected an array"),
+        };
+
+        let expected = Float64Array::from(vec![4.0, 8.0, 6.0, 7.0]);
+        let result_as_float64 = result_array
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+
+        assert_eq!(result_as_float64, &expected);
+    }
+}
