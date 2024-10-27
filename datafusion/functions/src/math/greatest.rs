@@ -327,4 +327,63 @@ mod tests {
 
         assert_eq!(result_as_float64, &expected);
     }
+
+    #[test]
+    fn test_greatest_string_arrays() {
+        let func = GreatestFunc::new();
+
+        let arr1 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("apple"),
+            Some("zebra"),
+            Some("ABC"),
+            None,
+        ])));
+        let arr2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("banana"),
+            Some("yellow"),
+            Some("abc"),
+            Some("banana"),
+        ])));
+        let arr3 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("cherry"),
+            Some("xylophone"),
+            Some("AbC"),
+            None,
+        ])));
+
+        let result = func.invoke(&[arr1, arr2, arr3]).unwrap();
+        let result_array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected an array"),
+        };
+
+        let expected = StringArray::from(vec![
+            Some("cherry"),
+            Some("zebra"),
+            Some("abc"),
+            Some("banana"),
+        ]);
+        let result_as_string =
+            result_array.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(result_as_string, &expected);
+    }
+
+    #[test]
+    fn test_greatest_mixed_types_error() {
+        let func = GreatestFunc::new();
+
+        let arr1 = ColumnarValue::Array(Arc::new(Int32Array::from(vec![1, 8, 3, 5])));
+        let arr2 = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("apple"),
+            Some("banana"),
+            Some("cherry"),
+            Some("date"),
+        ])));
+
+        // Attempt to invoke with mixed types (should result in an error)
+        let result = func.invoke(&[arr1, arr2]);
+
+        assert!(result.is_err());
+    }
 }
