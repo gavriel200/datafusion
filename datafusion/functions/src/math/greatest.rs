@@ -386,4 +386,74 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_greatest_date_arrays() {
+        let func = GreatestFunc::new();
+
+        use chrono::NaiveDate;
+
+        let dates1 = vec![
+            Some(NaiveDate::from_ymd_opt(2024, 1, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 6, 1)),
+            None,
+        ];
+        let dates2 = vec![
+            Some(NaiveDate::from_ymd_opt(2024, 2, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 5, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 1, 1)),
+        ];
+        let dates3 = vec![
+            Some(NaiveDate::from_ymd_opt(2024, 3, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 4, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 2, 1)),
+        ];
+
+        let date_to_days = |date_opt: Option<NaiveDate>| {
+            date_opt.map(|date| {
+                date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                    .num_days() as i32
+            })
+        };
+
+        let arr1_dates: Vec<Option<i32>> = dates1
+            .into_iter()
+            .map(|arg0: Option<Option<NaiveDate>>| date_to_days(arg0.flatten()))
+            .collect();
+        let arr2_dates: Vec<Option<i32>> = dates2
+            .into_iter()
+            .map(|arg0: Option<Option<NaiveDate>>| date_to_days(arg0.flatten()))
+            .collect();
+        let arr3_dates: Vec<Option<i32>> = dates3
+            .into_iter()
+            .map(|arg0: Option<Option<NaiveDate>>| date_to_days(arg0.flatten()))
+            .collect();
+
+        let arr1 = ColumnarValue::Array(Arc::new(Date32Array::from(arr1_dates)));
+        let arr2 = ColumnarValue::Array(Arc::new(Date32Array::from(arr2_dates)));
+        let arr3 = ColumnarValue::Array(Arc::new(Date32Array::from(arr3_dates)));
+
+        let result = func.invoke(&[arr1, arr2, arr3]).unwrap();
+        let result_array = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected an array"),
+        };
+
+        let expected_dates = vec![
+            Some(NaiveDate::from_ymd_opt(2024, 3, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 6, 1)),
+            Some(NaiveDate::from_ymd_opt(2024, 2, 1)),
+        ];
+        let expected_days: Vec<Option<i32>> = expected_dates
+            .into_iter()
+            .map(|arg0: Option<Option<NaiveDate>>| date_to_days(arg0.flatten()))
+            .collect();
+
+        let result_as_date32 =
+            result_array.as_any().downcast_ref::<Date32Array>().unwrap();
+
+        let expected_array = Date32Array::from(expected_days);
+
+        assert_eq!(result_as_date32, &expected_array);
+    }
 }
